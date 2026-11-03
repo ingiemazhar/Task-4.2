@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 const KEY = 'acl-marketplace-v3';
 const categories = ['all', 'textbooks', 'electronics', 'furniture', 'clothing', 'other'];
@@ -33,61 +33,190 @@ function ListingImage({src, alt, emoji, className=''}) {
    ? <img className={className} src={src} alt={alt} loading="lazy" onError={() => setBroken(true)} />
    : <span className="item-emoji" aria-label="Photo unavailable">{emoji || '📦'}</span>;
 }
+function ListingCard({item, manage=false}) {
+ return <article className="product">
+  <a className="photo" href={`#/items/${item.id}`} aria-label={`View ${item.title}`}>
+   <span className="stamp">{cap(item.condition)}</span>
+   <ListingImage src={item.photos?.[0]} alt={item.title} emoji={item.emoji} className="listing-img" />
+  </a>
+  <div className="prod-details">
+   <div className="prod-topline"><span className="muted">{cap(item.category)}</span><span className={item.status==='sold'?'soldstatus':'instock'}>{item.status.toUpperCase()}</span></div>
+   <h3><a href={`#/items/${item.id}`}>{item.title}</a></h3><p>{item.description || 'View this listing for more details.'}</p>
+   <div className="costline"><strong>EGP {item.price.toLocaleString()}</strong><span>By {item.seller || 'You'}</span></div>
+   <div className="card-actions"><a className="details-button" href={`#/items/${item.id}`}>View item <span aria-hidden="true">→</span></a>
+   {manage&&<a className="manage-listing" href={`#/items/${item.id}/edit?from=profile`}>Edit listing</a>}</div>
+  </div>
+ </article>;
+}
 export default function App(){
  const [items,setItems] = useState(saved);
  const [query,setQuery] = useState('');
  const [category,setCategory] = useState('all');
  const [sort,setSort] = useState('featured');
- const [selected,setSelected] = useState(null);
+ const [route,setRoute] = useState(() => window.location.hash.slice(1) || '/');
+ const selected = route.match(/^\/items\/([^/]+)$/)?.[1] || null;
+ const isEditor = route === '/sell' || /^\/items\/[^/]+\/edit(?:\?from=profile)?$/.test(route);
+ const returnToProfile = isEditor && route.endsWith('?from=profile');
+ const isBrowse = route === '/';
+ const isProfile = route === '/profile';
+ const myItems = items.filter(item => item.owner === 'you');
+ const activeItems = myItems.filter(item => item.status === 'active');
+ const soldItems = myItems.filter(item => item.status === 'sold');
+ const pageHeading = useRef(null);
  const [editor,setEditor] = useState(null); // null or {id,form}
  const [error,setError] = useState('');
  const [activePhoto,setActivePhoto] = useState(0);
  const [notice,setNotice] = useState('');
+ const editorReady = isEditor && Boolean(editor);
  useEffect(()=>localStorage.setItem(KEY,JSON.stringify(items)),[items]);
  useEffect(()=>setActivePhoto(0),[selected]);
+ useEffect(() => {
+  const onHashChange = () => setRoute(window.location.hash.slice(1) || '/');
+  window.addEventListener('hashchange', onHashChange);
+  return () => window.removeEventListener('hashchange', onHashChange);
+ }, []);
+ useEffect(() => {
+  window.scrollTo(0, 0);
+  pageHeading.current?.focus({preventScroll:true});
+  document.title = isBrowse ? 'Campus Exchange' : isProfile ? 'My profile | Campus Exchange' : route === '/sell' ? 'Sell an item | Campus Exchange' : `${items.find(item => item.id === route.split('/')[2])?.title || 'Listing'} | Campus Exchange`;
+ }, [route,editorReady]);
+ useEffect(() => {
+  setError('');
+  if (!isEditor) {setEditor(null);return;}
+  const id = route === '/sell' ? null : route.split('/')[2];
+  const item = id ? items.find(item => item.id === id && item.owner === 'you') : null;
+  if (id && !item) {setEditor(null);return;}
+  setEditor({id,form:item?{title:item.title,price:String(item.price),category:item.category,condition:item.condition,description:item.description,pickup:item.pickup || '',status:item.status}:{...emptyForm}});
+ }, [route,items]);
  const listing = useMemo(()=>{let a=items.filter(x=>(category==='all'||x.category===category)&&`${x.title} ${x.category} ${x.description}`.toLowerCase().includes(query.toLowerCase()));if(sort==='low')a.sort((a,b)=>a.price-b.price);if(sort==='high')a.sort((a,b)=>b.price-a.price);return a;},[items,category,query,sort]);
- function startEdit(item){if(item&&item.owner!=='you')return;setError('');setEditor({id:item?.id||null,form:item?{title:item.title,price:String(item.price),category:item.category,condition:item.condition,description:item.description,pickup:item.pickup || '',status:item.status}:{...emptyForm}});}
- function submit(event){event.preventDefault();const f=editor.form;const err=findError(f);if(err){setError('Unable to save item. Check the form.');return;}const original=editor.id?items.find(x=>x.id===editor.id):null;const next={...f, title:f.title.trim(),price:Number(f.price),description:f.description.trim(),pickup:f.pickup.trim(),photos:original?.photos || [],emoji:original?.emoji || '📦',owner:'you',seller:currentUser.name,sellerEmail:currentUser.email};
- if(editor.id){setItems(items.map(x=>x.id===editor.id?{...x,...next}:x));setNotice('Changes saved.');}else{setItems([{...next,id:`m-${Date.now()}`,status:'active'},...items]);setNotice('Item listed.');}setEditor(null);setSelected(null);}
- function reset(){setItems(seed);setSelected(null);setEditor(null);setQuery('');setCategory('all');setSort('featured');setNotice('Example items restored.');}
+ function submit(event){event.preventDefault();const f=editor.form;const err=findError(f);if(err){setError(err);return;}const original=editor.id?items.find(x=>x.id===editor.id):null;const next={...f, title:f.title.trim(),price:Number(f.price),description:f.description.trim(),pickup:f.pickup.trim(),photos:original?.photos || [],emoji:original?.emoji || '📦',owner:'you',seller:currentUser.name,sellerEmail:currentUser.email};
+ if(editor.id){setItems(items.map(x=>x.id===editor.id?{...x,...next}:x));setNotice('Changes saved.');}else{setItems([{...next,id:`m-${Date.now()}`,status:'active'},...items]);setNotice('Item listed.');}window.location.hash=returnToProfile?'/profile':'/';}
+ function reset(){setItems(seed);window.location.hash='/';setQuery('');setCategory('all');setSort('featured');setNotice('Example items restored.');}
+ function updateField(field, value){setEditor(current=>({...current,form:{...current.form,[field]:value}}));}
  return <div className="market-app">
-  <div className="utility"><span>Campus Exchange</span><span>Trusted by students • All prices in EGP</span></div>
-  <header className="navigation"><button className="brand" onClick={()=>{setSelected(null);setCategory('all')}}><span className="brand-icon">✳</span> CAMPUS<span className="brand-alt">exchange</span></button><nav><a href="#discover">Browse items</a><button onClick={()=>setCategory('textbooks')}>Textbooks</button><button onClick={()=>setCategory('electronics')}>Electronics</button></nav><div className="nav-actions"><span className="usercircle">Y</span><button className="sell-cta" onClick={()=>startEdit(null)}>+ Sell an item</button></div></header>
+  <div className="utility"><span>From students, for students.</span><span>Campus Exchange · All prices in EGP</span></div>
+  <header className="navigation"><a className="brand" href="#/" onClick={()=>setCategory('all')}><span className="brand-icon">✳</span> CAMPUS<span className="brand-alt">exchange</span></a><div className="nav-actions"><a className="profile-link" href="#/profile" aria-label="My profile" aria-current={isProfile?'page':undefined}><span className="usercircle" aria-hidden="true">Y</span><span className="profile-link-label">My profile</span></a><a className="sell-cta" href="#/sell">+ Sell an item</a></div></header>
   <main>
-   <section className="promo"><div className="promo-copy"><span className="tag">THE CAMPUS MARKETPLACE</span><h1>Everything you need,<br/><i>right around campus.</i></h1><p>Browse little finds, big essentials and almost everything in between.</p><button onClick={()=>document.getElementById('discover')?.scrollIntoView({behavior:'smooth'})}>Explore listings <span>↗</span></button></div><div className="promo-art"><span>📚</span><span>💡</span><span>🎧</span><span>🛋️</span></div></section>
-   <section className="discovery" id="discover"><div className="discover-top"><div><p className="section-kicker">CURATED FOR YOUR CAMPUS</p><h2>Find something good.</h2><p>Items listed by people around you.</p></div><div className="discover-right"><label className="search"><span>⌕</span><input aria-label="Search listings" placeholder="Search listings" value={query} onChange={e=>setQuery(e.target.value)}/></label><label className="sort"><span>Sort</span><select value={sort} onChange={e=>setSort(e.target.value)}><option value="featured">Featured</option><option value="low">Price: low to high</option><option value="high">Price: high to low</option></select></label></div></div>
-    <div className="category-row">{categories.map(c=><button key={c} onClick={()=>setCategory(c)} className={category===c?'on':''}>{c==='all'?'All items':cap(c)}</button>)}</div>
-    {notice&&<p className="notice" role="status">{notice} <button onClick={()=>setNotice('')}>×</button></p>}
-    <div className="listing-grid">{listing.map(item=><article className="product" key={item.id}><button className="photo" onClick={()=>setSelected(item.id)}><span className="stamp">{cap(item.condition)}</span><ListingImage src={item.photos?.[0]} alt={item.title} emoji={item.emoji} className="listing-img" /><span className="category-caption">{cap(item.category)}</span></button><div className="prod-details"><div className="prod-topline"><span className="muted">{item.category}</span><span className={item.status==='sold'?'soldstatus':'instock'}>{item.status.toUpperCase()}</span></div><h3>{item.title}</h3><p>{item.description}</p><div className="costline"><strong>EGP {item.price.toLocaleString()}</strong><span>{item.condition}</span></div><button className="details-button" onClick={()=>setSelected(item.id)}>View item <span>↗</span></button></div></article>)}{listing.length===0&&<p className="noresults">No listings match your search.</p>}</div>
+   {isBrowse&&<>
+   <section className="promo"><div className="promo-copy"><span className="tag">YOUR CAMPUS MARKETPLACE</span><h1 ref={pageHeading} tabIndex="-1">Everything you need,<br/><i>right around campus.</i></h1><p>Find a good deal, give an item a new home, and connect with students around you.</p><button onClick={()=>document.getElementById('discover')?.scrollIntoView({behavior:'smooth'})}>Explore listings <span aria-hidden="true">→</span></button></div>
+    <div className="promo-art" aria-hidden="true">
+     <svg className="campus-illustration" viewBox="0 0 360 250" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="189" cy="126" r="105" fill="#e3dbee"/>
+      <g stroke="#8a74a5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+       <path d="M28 216h304M59 216v16M305 216v16"/>
+       <rect x="98" y="91" width="137" height="99" rx="8" fill="#fff"/>
+       <rect x="108" y="101" width="117" height="77" rx="3" fill="#f5f2fa" stroke="#d9cde9"/>
+       <path d="M89 190h155l10 16H79l10-16Z" fill="#ece5f4"/>
+       <path d="M149 190h36l4 7h-44l4-7Z" fill="#fff"/>
+       <rect x="32" y="199" width="53" height="16" rx="3" fill="#c7b5dc"/>
+       <rect x="39" y="182" width="46" height="16" rx="3" fill="#fff"/>
+       <path d="M47 188h29M40 206h36" stroke="#a18bb9"/>
+       <path d="M282 206v-83l-25-38M268 207h29"/>
+       <path d="M239 80h33l14 34h-61l14-34Z" fill="#fff"/>
+       <path d="M246 80v-8h20v8"/>
+       <path d="M145 140c0-12 10-22 22-22s22 10 22 22" stroke="#b7a0cf" strokeWidth="3"/>
+       <rect x="140" y="139" width="10" height="19" rx="5" fill="#d8cae7" stroke="#b7a0cf"/>
+       <rect x="184" y="139" width="10" height="19" rx="5" fill="#d8cae7" stroke="#b7a0cf"/>
+      </g>
+      <circle cx="66" cy="98" r="5" fill="#b6a0cd"/><circle cx="294" cy="50" r="4" fill="#c5b5d9"/>
+     </svg>
+    </div>
    </section>
-   <footer><strong>CAMPUS exchange</strong><span>From students, for students.</span><button onClick={reset}>Reset demo</button></footer>
-  </main>
+   <section className="discovery" id="discover">
+    <div className="discover-top"><h2>Find your next campus essential</h2><p>Explore pre-loved items from students around you.</p></div>
+    <div className="browse-tools">
+    <div className="listing-controls" role="group" aria-label="Search, filter and sort listings">
+     <label className="control-field search-field">
+      <span className="control-label">Search listings</span>
+      <div className="search-input">
+       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+       <input aria-label="Search listings" placeholder="Search by name or keyword" value={query} onChange={e=>setQuery(e.target.value)}/>
+      </div>
+     </label>
+     <label className="control-field">
+      <span className="control-label">Filter by category</span>
+      <select value={category} onChange={e=>setCategory(e.target.value)}>{categories.map(c=><option value={c} key={c}>{c==='all'?'All categories':cap(c)}</option>)}</select>
+     </label>
+     <label className="control-field">
+      <span className="control-label">Sort by</span>
+      <select value={sort} onChange={e=>setSort(e.target.value)}><option value="featured">Featured</option><option value="low">Price: low to high</option><option value="high">Price: high to low</option></select>
+     </label>
+    </div>
+    <div className="filter-bar"><p className="results-count" role="status">{listing.length} {listing.length===1?'item':'items'}{category!=='all'?` in ${cap(category)}`:''}</p>{category!=='all'&&<button className="clear-filter" onClick={()=>setCategory('all')}>Clear category filter</button>}</div>
+    </div>
+    {notice&&<p className="notice" role="status">{notice} <button aria-label="Dismiss notification" onClick={()=>setNotice('')}>×</button></p>}
+    <div className="listing-grid">{listing.map(item=><ListingCard item={item} key={item.id}/>)}{listing.length===0&&<div className="noresults"><h3>No items found</h3><p>Try another keyword or clear your filters to see more listings.</p><button className="cancel-button" onClick={()=>{setQuery('');setCategory('all');}}>Clear search and filters</button></div>}</div>
+   </section>
+   </>}
+   {isProfile&&<section className="profile-page" aria-labelledby="profile-title">
+    <a className="back-link" href="#/">← Back to listings</a>
+    <div className="profile-header">
+     <div className="profile-identity"><span className="profile-avatar" aria-hidden="true">Y</span><div><p className="section-kicker">YOUR CAMPUS EXCHANGE</p><h1 id="profile-title" ref={pageHeading} tabIndex="-1">My profile</h1><p className="profile-account">{currentUser.name} · {currentUser.email}</p></div></div>
+    </div>
+    {notice&&<p className="notice" role="status">{notice} <button aria-label="Dismiss notification" onClick={()=>setNotice('')}>×</button></p>}
+    <section className="profile-section" aria-labelledby="active-listings-title">
+     <div className="profile-section-head"><h2 id="active-listings-title">Active listings <span className="listing-count">{activeItems.length}</span></h2><p>The items you have listed for sale.</p></div>
+     {activeItems.length>0?<div className="listing-grid">{activeItems.map(item=><ListingCard item={item} manage key={item.id}/>)}</div>:<div className="profile-empty"><p>You have no active listings yet.</p></div>}
+    </section>
+    <section className="profile-section" aria-labelledby="sold-items-title">
+     <div className="profile-section-head"><h2 id="sold-items-title">Sold items <span className="listing-count">{soldItems.length}</span></h2><p>A record of the items you have sold.</p></div>
+     {soldItems.length>0?<div className="listing-grid">{soldItems.map(item=><ListingCard item={item} manage key={item.id}/>)}</div>:<div className="profile-empty"><p>You have no sold items yet. When you sell an item, edit its listing and set its status to Sold.</p></div>}
+    </section>
+   </section>}
   {selected&&(()=>{
    const item=items.find(x=>x.id===selected);if(!item)return null;
    const images=item.photos || [];
    const subject=encodeURIComponent(`Campus Exchange: ${item.title}`);
    const body=encodeURIComponent(`Hi ${item.seller},\n\nI'm interested in your listing "${item.title}" (EGP ${item.price}). Is it still available?\n\n`);
-   return <div className="overlay" onMouseDown={e=>e.target===e.currentTarget&&setSelected(null)}>
-    <section className="detail-panel" role="dialog" aria-modal="true" aria-label="Item details">
-     <button className="close" aria-label="Close item details" onClick={()=>setSelected(null)}>×</button>
+   return <section className="item-page" aria-label="Item details">
+    <a className="back-link" href="#/">← Back to listings</a>
+    <div className="detail-panel">
+     <div className="detail-gallery">
      <div className="detail-visual">
       <ListingImage src={images[activePhoto] || images[0]} alt={`${item.title} photo ${activePhoto+1}`} emoji={item.emoji} className="detail-img" />
      </div>
      {images.length>1&&<div className="detail-thumbs" aria-label="Item photos">{images.map((src,index)=><button type="button" key={index} className={activePhoto===index?'thumb active':'thumb'} aria-label={`Show photo ${index+1} of ${images.length}`} aria-pressed={activePhoto===index} onClick={()=>setActivePhoto(index)}><ListingImage src={src} alt="" emoji={item.emoji} className="thumb-img" /></button>)}</div>}
+     </div>
+     <div className="detail-copy">
      <p className="section-kicker">{cap(item.category)} · {cap(item.condition)}</p>
-     <h2>{item.title}</h2>
+     <h1 ref={pageHeading} tabIndex="-1">{item.title}</h1>
      <h3>EGP {item.price.toLocaleString()}</h3>
      <p className="item-description">{item.description||'No description supplied.'}</p>
      <div className="detail-meta"><p><strong>Pickup</strong><br/>{item.pickup || 'Arrange directly with seller'}</p><p><strong>Seller</strong><br/>{item.seller}</p></div>
      <p className="muted">Status: {item.status}</p>
      {item.owner==='you'
-       ? <button className="sell-cta" onClick={()=>startEdit(item)}>Edit your listing</button>
+       ? <a className="sell-cta" href={`#/items/${item.id}/edit`}>Edit your listing</a>
        : item.status==='sold'
          ? <p className="fineprint">This item is marked as sold.</p>
          : <a className="sell-cta contact-seller" href={`mailto:${item.sellerEmail}?subject=${subject}&body=${body}`}>✉ Contact seller</a>}
-    </section>
-   </div>;
+     </div>
+    </div>
+   </section>;
   })()}
-  {editor&&<div className="overlay" onMouseDown={e=>e.target===e.currentTarget&&setEditor(null)}><section className="sell-modal" role="dialog" aria-modal="true" aria-label={editor.id?'Edit item':'Sell item'}><div className="modal-head"><div><p className="section-kicker">CAMPUS EXCHANGE</p><h2>{editor.id?'Edit your listing':'Sell an item'}</h2><p>Add the details and we'll take care of the rest.</p></div><button className="close" onClick={()=>setEditor(null)}>×</button></div><form onSubmit={submit}><div className="field-grid"><label><span>Item title *</span><input value={editor.form.title} onChange={e=>setEditor(s=>({...s,form:{...s.form,title:e.target.value}}))} placeholder="What are you selling?"/></label><label><span>Price (EGP) *</span><input type="number" min="0" step="0.01" value={editor.form.price} onChange={e=>setEditor(s=>({...s,form:{...s.form,price:e.target.value}}))} placeholder="Price"/></label><label><span>Category *</span><select value={editor.form.category} onChange={e=>setEditor(s=>({...s,form:{...s.form,category:e.target.value}}))}><option value="">Select</option>{categories.slice(1).map(c=><option value={c} key={c}>{cap(c)}</option>)}</select></label><label><span>Condition *</span><select value={editor.form.condition} onChange={e=>setEditor(s=>({...s,form:{...s.form,condition:e.target.value}}))}><option value="">Select</option>{conditions.map(c=><option value={c} key={c}>{cap(c)}</option>)}</select></label><label className="wide"><span>Description</span><textarea value={editor.form.description} onChange={e=>setEditor(s=>({...s,form:{...s.form,description:e.target.value}}))} placeholder="Description" rows="5"/></label><label className="wide"><span>Pickup / meetup location</span><input value={editor.form.pickup} onChange={e=>setEditor(s=>({...s,form:{...s.form,pickup:e.target.value}}))} placeholder="e.g. Library entrance or arrange on campus" /></label><label className="wide"><span>Seller contact email</span><input value={currentUser.email} readOnly aria-readonly="true" className="readonly-input"/><small className="email-helper">Taken from your registered account, so buyers can contact you about this item.</small></label>{editor.id&&<label><span>Status</span><select value={editor.form.status} onChange={e=>setEditor(s=>({...s,form:{...s.form,status:e.target.value}}))}><option value="active">Active</option><option value="sold">Sold</option></select></label>}</div>{error&&<p className="alert" role="alert">{error}</p>}<div className="modal-foot"><button type="button" onClick={()=>setEditor(null)}>Cancel</button><button className="sell-cta" type="submit">{editor.id?'Save changes':'Publish item'}</button></div></form></section></div>}
+  {isEditor&&editor&&<section className="editor-page">
+   <a className="back-link" href={returnToProfile?'#/profile':editor.id?`#/items/${editor.id}`:'#/'}>← {returnToProfile?'Back to profile':editor.id?'Back to item':'Back to listings'}</a>
+   <div className="sell-page">
+    <div className="page-head"><p className="section-kicker">CAMPUS EXCHANGE</p><h1 ref={pageHeading} tabIndex="-1">{editor.id?'Edit your listing':'Sell an item'}</h1><p>{editor.id?'Keep your item details and availability up to date.':'A few clear details will help your item find its next owner.'}</p><small>Fields marked * are required.</small></div>
+    <form onSubmit={submit}>
+     <fieldset className="form-section"><legend>Item details</legend><div className="field-grid">
+      <label><span>Item title *</span><input value={editor.form.title} onChange={e=>updateField('title',e.target.value)} placeholder="e.g. Calculus II textbook"/></label>
+      <label><span>Price (EGP) *</span><input type="number" min="0" step="0.01" value={editor.form.price} onChange={e=>updateField('price',e.target.value)} placeholder="0.00"/></label>
+      <label><span>Category *</span><select value={editor.form.category} onChange={e=>updateField('category',e.target.value)}><option value="">Choose a category</option>{categories.slice(1).map(c=><option value={c} key={c}>{cap(c)}</option>)}</select></label>
+      <label><span>Condition *</span><select value={editor.form.condition} onChange={e=>updateField('condition',e.target.value)}><option value="">Choose the condition</option>{conditions.map(c=><option value={c} key={c}>{cap(c)}</option>)}</select></label>
+      <label className="wide"><span>Description</span><textarea value={editor.form.description} onChange={e=>updateField('description',e.target.value)} placeholder="Include useful details, what is included, and any signs of wear." rows="4"/></label>
+      {editor.id&&<label><span>Listing status</span><select value={editor.form.status} onChange={e=>updateField('status',e.target.value)}><option value="active">Active</option><option value="sold">Sold</option></select></label>}
+     </div></fieldset>
+     <fieldset className="form-section"><legend>Pickup &amp; contact</legend><div className="field-grid">
+      <label className="wide"><span>Pickup / meetup location</span><input value={editor.form.pickup} onChange={e=>updateField('pickup',e.target.value)} placeholder="e.g. Library entrance or arrange on campus"/></label>
+      <label className="wide"><span>Seller contact email</span><input value={currentUser.email} readOnly aria-readonly="true" className="readonly-input"/><small className="email-helper">Buyers can contact you using the email from your account.</small></label>
+     </div></fieldset>
+     {error&&<p className="alert" role="alert">{error}</p>}
+     <div className="form-actions"><a className="cancel-button" href={returnToProfile?'#/profile':editor.id?`#/items/${editor.id}`:'#/'}>Cancel</a><button className="sell-cta" type="submit">{editor.id?'Save changes':'Publish item'}</button></div>
+    </form>
+   </div>
+  </section>}
+  {(!isBrowse&&!isProfile&&!selected&&!isEditor || selected&&!items.some(item=>item.id===selected) || isEditor&&!editor)&&<section className="unavailable-page"><h1 ref={pageHeading} tabIndex="-1">Listing unavailable</h1><p>This listing could not be found or cannot be edited from your account.</p><a className="back-link" href="#/">← Back to listings</a></section>}
+  <footer><strong>CAMPUS exchange</strong><span>From students, for students.</span><button onClick={reset}>Reset demo</button></footer>
+  </main>
  </div>;
 }
